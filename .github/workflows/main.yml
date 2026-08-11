@@ -1,21 +1,22 @@
 name: Proximus Cybersecurity Content Crawler
 
-# Trigger: Manual (on-demand) + Scheduled (monthly)
 on:
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
   schedule:
-    - cron: '0 2 1 * *'  # Run on 1st of each month at 2:00 AM UTC
+    - cron: '0 2 1 * *'
 
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
@@ -27,17 +28,18 @@ jobs:
       - name: Run crawler
         run: python proximus_crawler.py
       
+      - name: Check for changes
+        id: verify
+        run: |
+          if [ -f proximus_cybersecurity_audit_*.csv ]; then
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Commit and push results
+        if: steps.verify.outputs.has_results == 'true'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add proximus_cybersecurity_audit_*.csv
-          git commit -m "Update Proximus cybersecurity audit - $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          git commit -m "Update Proximus cybersecurity audit - $(date +'%Y-%m-%d')"
           git push
-      
-      - name: Create summary
-        run: |
-          echo "## Proximus Crawler Report" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: ✅ Completed" >> $GITHUB_STEP_SUMMARY
-          echo "- **Time**: $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifact**: proximus_cybersecurity_audit_*.csv" >> $GITHUB_STEP_SUMMARY
