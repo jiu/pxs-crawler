@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Proximus Cybersecurity Content Crawler - VERSION 6 (TEST MODE)
-Limited to 100 URLs for quick testing of the entire pipeline
+Proximus Cybersecurity Content Crawler - VERSION 6.2 (SMART CACHE TEST MODE)
+Tests smart cache logic with limited URLs (100) for quick validation
 """
 
 import requests
@@ -10,6 +10,8 @@ import csv
 import time
 from datetime import datetime
 import sys
+import json
+import os
 from urllib.parse import urljoin, urlparse
 import warnings
 from bs4 import XMLParsedAsHTMLWarning
@@ -21,40 +23,20 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 SITE_URL = "https://www.proximus.be"
 SITEMAP_URL = "https://www.proximus.be/sitemap.xml"
 OUTPUT_FILE = f"proximus_cybersecurity_audit_TEST_{datetime.now().strftime('%Y-%m-%d')}.csv"
-MAX_URLS = 300  # INCREASED for better testing coverage
+MAX_URLS = 100  # TEST LIMIT! 
+CACHE_FILE = "sitemap_cache.json"
+RESULTS_BACKUP = "previous_results.json"
 
-# Keywords to search for (case insensitive)
+# Keywords
 KEYWORDS = [
-    "cybersecurity",
-    "security",
-    "phishing",
-    "ransomware",
-    "digital trust",
-    "protection",
-    "data breach",
-    "malware",
-    "threat",
-    "encryption",
-    "parental control",
-    "secure net",
-    "norton",
-    "ada",
-    "cyber",
-    "safe online",
-    "online safety",
-    "digital security",
-    "virus",
-    "spyware",
-    "firewall",
-    "password",
-    "authentication",
-    "scam",
-    "fraud",
-    "trust",
-    "safe"
+    "cybersecurity", "security", "phishing", "ransomware", "digital trust",
+    "protection", "data breach", "malware", "threat", "encryption",
+    "parental control", "secure net", "norton", "ada", "cyber",
+    "safe online", "online safety", "digital security", "virus", "spyware",
+    "firewall", "password", "authentication", "scam", "fraud", "trust", "safe"
 ]
 
-# Headers to avoid bot detection
+# Headers
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -64,25 +46,22 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-all_urls = []  # Now stores tuples: (url, language)
+all_urls = []
 
 def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lang="EN"):
     """Recursively extract URLs from sitemaps, tracking language"""
-    if depth > 5:  # Prevent infinite recursion
+    if depth > 5:
         return []
     
     if allowed_langs is None:
-        allowed_langs = ['en', 'fr', 'nl']  # Default languages
+        allowed_langs = ['en', 'fr', 'nl']
     
     try:
         print(f"[*] Fetching sitemap (depth {depth}): {sitemap_url}")
         response = requests.get(sitemap_url, headers=HEADERS, timeout=30)
         response.raise_for_status()
         
-        # Parse XML properly
         soup = BeautifulSoup(response.content, 'xml')
-        
-        # Check if this is a sitemap index (contains other sitemaps)
         sitemaps = soup.find_all('sitemap')
         
         if sitemaps:
@@ -91,11 +70,9 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lan
                 loc = sitemap.find('loc')
                 if loc:
                     nested_url = loc.text.strip()
-                    
-                    # Detect language from URL
                     lang_code = "EN"
+                    
                     if 'iportal' in nested_url:
-                        # Extract language from URL (iportal-en-, iportal-fr-, etc.)
                         if 'iportal-en' in nested_url:
                             lang_code = 'EN'
                         elif 'iportal-fr' in nested_url:
@@ -105,18 +82,16 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lan
                         elif 'iportal-de' in nested_url:
                             lang_code = 'DE'
                         
-                        # Only follow allowed languages
                         if lang_code.lower() not in allowed_langs:
-                            print(f"[→] Skipping {lang_code} sitemap (not in allowed languages)")
+                            print(f"[→] Skipping {lang_code} sitemap")
                             continue
                     
-                    print(f"[→] Following nested sitemap ({lang_code}): {nested_url}")
+                    print(f"[→] Following nested sitemap ({lang_code})")
                     urls = get_urls_from_sitemaps(nested_url, depth + 1, allowed_langs, lang_code)
                     all_urls.extend(urls)
             
             return []
         
-        # Otherwise extract URLs (this is an actual sitemap with URLs)
         urls = []
         url_entries = soup.find_all('url')
         
@@ -125,9 +100,7 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lan
                 loc = url_entry.find('loc')
                 if loc:
                     url = loc.text.strip()
-                    # Only add if it's an iportal URL (main content)
                     if 'iportal' in url or '/en/' in url or '/fr/' in url or '/nl/' in url:
-                        # Store tuple: (url, language)
                         urls.append((url, current_lang))
             
             print(f"[+] Found {len(urls)} content URLs in {current_lang} sitemap")
@@ -138,41 +111,84 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lan
         print(f"[-] Error fetching {sitemap_url}: {e}")
         return []
 
+def load_previous_cache():
+    """Load previous sitemap snapshot"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_cache(urls_dict):
+    """Save current sitemap snapshot"""
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(urls_dict, f)
+        print(f"[+] Sitemap cache saved ({len(urls_dict)} URLs)")
+    except Exception as e:
+        print(f"[-] Error saving cache: {e}")
+
+def load_previous_results():
+    """Load previous crawl results"""
+    if os.path.exists(RESULTS_BACKUP):
+        try:
+            with open(RESULTS_BACKUP, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_results_backup(results):
+    """Backup current results"""
+    try:
+        with open(RESULTS_BACKUP, 'w') as f:
+            json.dump(results, f)
+        print(f"[+] Results backup saved ({len(results)} pages)")
+    except Exception as e:
+        print(f"[-] Error saving backup: {e}")
+
+def detect_changes(current_urls, previous_cache):
+    """Detect new and removed URLs"""
+    current_dict = {url: lang for url, lang in current_urls}
+    previous_dict = previous_cache
+    
+    new_urls = [(url, lang) for url, lang in current_urls if url not in previous_dict]
+    removed_urls = [url for url in previous_dict if url not in current_dict]
+    existing_urls = [(url, lang) for url, lang in current_urls if url in previous_dict]
+    
+    return new_urls, removed_urls, existing_urls
+
 def fetch_page(url):
-    """Fetch a single page and return HTML"""
+    """Fetch a single page"""
     try:
         response = requests.get(url, headers=HEADERS, timeout=30)
         response.raise_for_status()
         return response.text
     except Exception as e:
-        print(f"[-] Error fetching {url}: {e}")
         return None
 
 def extract_content(html, url, language="EN"):
-    """Extract title, H1, H2, meta description, and preview from HTML"""
+    """Extract page content"""
     if not html:
         return None
     
     soup = BeautifulSoup(html, 'html.parser')
     
-    # Extract title
     title_tag = soup.find('title')
     title = title_tag.text.strip() if title_tag else "No title"
     
-    # Extract H1
     h1_tag = soup.find('h1')
     h1 = h1_tag.text.strip() if h1_tag else "No H1"
     
-    # Extract H2s
     h2_tags = soup.find_all('h2')
     h2s = [h2.text.strip() for h2 in h2_tags[:3]]
     h2_text = " | ".join(h2s) if h2s else ""
     
-    # Extract meta description
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     meta_description = meta_desc.get('content', '') if meta_desc else ""
     
-    # Extract text preview (remove scripts/styles)
     for script in soup(["script", "style"]):
         script.decompose()
     
@@ -191,7 +207,7 @@ def extract_content(html, url, language="EN"):
     }
 
 def has_security_keywords(content):
-    """Check if content contains any security-related keywords"""
+    """Check if content has security keywords"""
     if not content:
         return False
     
@@ -211,100 +227,100 @@ def has_security_keywords(content):
 
 def main():
     """Main crawler function"""
-    print("=" * 60)
-    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER - VERSION 6 (TEST MODE)")
-    print("=" * 60)
-    print(f"[TEST] Limited to {MAX_URLS} URLs for quick testing")
+    print("=" * 70)
+    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER - V6.2 (SMART CACHE TEST MODE)")
+    print("=" * 70)
+    print(f"[TEST] Limited to {MAX_URLS} URLs for smart cache testing")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Get URLs from sitemap (including nested)
-    print("[*] Fetching sitemap structure...")
+    # Get current sitemap
+    print("[*] Fetching current sitemap structure...")
     get_urls_from_sitemaps(SITEMAP_URL)
     
     if not all_urls:
-        print("[-] No URLs found in sitemaps. Trying direct URL...")
-        all_urls.extend([
-            ("https://www.proximus.be/en/", "EN"),
-            ("https://www.proximus.be/en/family/digital-protection", "EN"),
-            ("https://www.proximus.be/en/packs/options/secure-net", "EN"),
-            ("https://www.proximus.be/en/business/", "EN"),
-        ])
+        print("[-] No URLs found. Exiting.")
+        sys.exit(1)
     
-    # Filter to only Proximus URLs (remove duplicates but keep language info)
-    # Create a dict to keep unique URLs with their languages
+    # Filter to Proximus URLs only
     unique_urls = {}
     for url, lang in all_urls:
         if 'proximus.be' in url:
             if url not in unique_urls:
                 unique_urls[url] = lang
     
-    proximus_urls = list(unique_urls.items())  # Back to list of tuples
+    current_urls = list(unique_urls.items())
+    print(f"[+] Current sitemap has {len(current_urls)} unique URLs")
     
     # LIMIT TO MAX_URLS FOR TESTING
-    proximus_urls = proximus_urls[:MAX_URLS]
-    
-    print(f"[+] Total unique URLs to crawl: {len(proximus_urls)} (limited to {MAX_URLS} for testing)")
-    print(f"    EN: {sum(1 for _, l in proximus_urls if l == 'EN')}")
-    print(f"    FR: {sum(1 for _, l in proximus_urls if l == 'FR')}")
-    print(f"    NL: {sum(1 for _, l in proximus_urls if l == 'NL')}")
+    current_urls = current_urls[:MAX_URLS]
+    print(f"[TEST] Limited crawl to {len(current_urls)} URLs")
     print()
     
-    if len(proximus_urls) == 0:
-        print("[-] No Proximus URLs found. Exiting.")
-        sys.exit(1)
+    # Load previous cache and detect changes
+    previous_cache = load_previous_cache()
+    new_urls, removed_urls, existing_urls = detect_changes(current_urls, previous_cache)
     
-    # Crawl and analyze each page
-    security_pages = []
-    total_pages = len(proximus_urls)
-    
-    print(f"[*] Crawling {total_pages} pages...")
+    print("[*] CHANGE DETECTION (Smart Cache Logic):")
+    print(f"    New URLs: {len(new_urls)}")
+    print(f"    Removed URLs: {len(removed_urls)}")
+    print(f"    Existing URLs: {len(existing_urls)}")
     print()
     
-    for index, (url, language) in enumerate(proximus_urls, 1):
-        # Print progress every 5 pages
-        if index % 5 == 0 or index == 1:
-            print(f"[Progress] {index}/{total_pages} ({index*100//total_pages}%)")
-        
-        # DEBUG: Show first few URLs being crawled
-        if index <= 5:
-            print(f"  [DEBUG] Crawling: {url[:80]}...")
-        
-        # Fetch page
-        html = fetch_page(url)
-        if not html:
-            if index <= 10:
-                print(f"  [DEBUG] Failed to fetch: {url[:80]}")
-            continue
-        
-        # Extract content (pass language)
-        content = extract_content(html, url, language)
-        if not content:
-            if index <= 10:
-                print(f"  [DEBUG] Failed to extract: {url[:80]}")
-            continue
-        
-        # Check if page has security keywords
-        if has_security_keywords(content):
-            security_pages.append(content)
-            print(f"  ✓ Found security page ({language}): {url}")
-        else:
-            # DEBUG: Sample of pages that DON'T match
-            if index <= 10:
-                print(f"  [no match] {url[:60]}... | Title: {content['title'][:40]}...")
-        
-        # Be respectful: 0.5 second delay between requests
-        time.sleep(0.5)
-    
-    print()
-    print(f"[+] Found {len(security_pages)} pages with security-related content")
+    # Load previous results
+    previous_results = load_previous_results()
+    print(f"[+] Previous crawl had {len(previous_results)} security pages")
     print()
     
-    # Write results to CSV
+    # CRAWL STRATEGY
+    if len(new_urls) == 0 and len(removed_urls) == 0:
+        print("[+] No changes detected! Using previous results...")
+        security_pages = [dict(p) for p in previous_results.values()]
+    else:
+        print(f"[*] Crawling {len(new_urls)} NEW URLs...")
+        print()
+        
+        security_pages_dict = dict(previous_results)
+        security_pages = []
+        
+        # Crawl NEW URLs
+        for index, (url, language) in enumerate(new_urls, 1):
+            if index % 10 == 0 or index == 1:
+                print(f"[Progress] {index}/{len(new_urls)} ({index*100//len(new_urls)}%)")
+            
+            html = fetch_page(url)
+            if not html:
+                continue
+            
+            content = extract_content(html, url, language)
+            if not content:
+                continue
+            
+            if has_security_keywords(content):
+                security_pages_dict[url] = content
+                print(f"  ✓ Found security page ({language}): {url}")
+            
+            time.sleep(0.5)
+        
+        # Remove deleted URLs from results
+        for url in removed_urls:
+            if url in security_pages_dict:
+                del security_pages_dict[url]
+        
+        # Convert back to list
+        security_pages = list(security_pages_dict.values())
+        
+        # Save backup
+        save_results_backup(security_pages_dict)
+    
+    print()
+    print(f"[+] Final result: {len(security_pages)} pages with security content")
+    print()
+    
+    # Write CSV
     if security_pages:
         print(f"[*] Writing results to {OUTPUT_FILE}...")
         
-        # Sort by language, then by URL for better organization
         security_pages_sorted = sorted(security_pages, key=lambda x: (x['language'], x['url']))
         
         with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as csvfile:
@@ -325,23 +341,29 @@ def main():
         
         print(f"[+] Results saved to {OUTPUT_FILE}")
         
-        # Print summary by language
+        # Summary
         en_count = sum(1 for p in security_pages if p['language'] == 'EN')
         fr_count = sum(1 for p in security_pages if p['language'] == 'FR')
         nl_count = sum(1 for p in security_pages if p['language'] == 'NL')
         
-        print(f"[+] Summary:")
+        print(f"[+] Summary by language:")
         print(f"    EN: {en_count} pages")
         print(f"    FR: {fr_count} pages")
         print(f"    NL: {nl_count} pages")
     else:
         print("[-] No security-related pages found")
     
+    # Save cache for next run
+    cache_dict = {url: lang for url, lang in current_urls}
+    save_cache(cache_dict)
+    
     print()
-    print("=" * 60)
+    print("=" * 70)
     print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"[TEST MODE COMPLETE] Ready for full crawl!")
-    print("=" * 60)
+    print("[V6.2 TEST COMPLETE] Smart cache validated!")
+    print()
+    print("NEXT STEP: Upload V5 (full version) for the complete crawl")
+    print("=" * 70)
 
 if __name__ == "__main__":
     main()
