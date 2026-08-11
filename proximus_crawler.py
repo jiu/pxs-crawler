@@ -63,10 +63,10 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-all_urls = []
+all_urls = []  # Now stores tuples: (url, language)
 
-def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None):
-    """Recursively extract URLs from sitemaps"""
+def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None, current_lang="EN"):
+    """Recursively extract URLs from sitemaps, tracking language"""
     if depth > 5:  # Prevent infinite recursion
         return []
     
@@ -91,24 +91,26 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None):
                 if loc:
                     nested_url = loc.text.strip()
                     
-                    # Filter by language for iportal sitemaps
+                    # Detect language from URL
+                    lang_code = "EN"
                     if 'iportal' in nested_url:
                         # Extract language from URL (iportal-en-, iportal-fr-, etc.)
-                        lang = None
                         if 'iportal-en' in nested_url:
-                            lang = 'en'
+                            lang_code = 'EN'
                         elif 'iportal-fr' in nested_url:
-                            lang = 'fr'
+                            lang_code = 'FR'
                         elif 'iportal-nl' in nested_url:
-                            lang = 'nl'
+                            lang_code = 'NL'
+                        elif 'iportal-de' in nested_url:
+                            lang_code = 'DE'
                         
                         # Only follow allowed languages
-                        if lang and lang not in allowed_langs:
-                            print(f"[→] Skipping {lang} sitemap (not in allowed languages)")
+                        if lang_code.lower() not in allowed_langs:
+                            print(f"[→] Skipping {lang_code} sitemap (not in allowed languages)")
                             continue
                     
-                    print(f"[→] Following nested sitemap: {nested_url}")
-                    urls = get_urls_from_sitemaps(nested_url, depth + 1, allowed_langs)
+                    print(f"[→] Following nested sitemap ({lang_code}): {nested_url}")
+                    urls = get_urls_from_sitemaps(nested_url, depth + 1, allowed_langs, lang_code)
                     all_urls.extend(urls)
             
             return []
@@ -124,9 +126,10 @@ def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None):
                     url = loc.text.strip()
                     # Only add if it's an iportal URL (main content)
                     if 'iportal' in url or '/en/' in url or '/fr/' in url or '/nl/' in url:
-                        urls.append(url)
+                        # Store tuple: (url, language)
+                        urls.append((url, current_lang))
             
-            print(f"[+] Found {len(urls)} content URLs in this sitemap")
+            print(f"[+] Found {len(urls)} content URLs in {current_lang} sitemap")
         
         return urls
         
@@ -144,7 +147,7 @@ def fetch_page(url):
         print(f"[-] Error fetching {url}: {e}")
         return None
 
-def extract_content(html, url):
+def extract_content(html, url, language="EN"):
     """Extract title, H1, H2, meta description, and preview from HTML"""
     if not html:
         return None
@@ -177,6 +180,7 @@ def extract_content(html, url):
     
     return {
         'url': url,
+        'language': language,
         'title': title,
         'h1': h1,
         'h2s': h2_text,
@@ -225,11 +229,20 @@ def main():
             "https://www.proximus.be/en/business/",
         ])
     
-    # Filter to only Proximus URLs
-    proximus_urls = [url for url in all_urls if 'proximus.be' in url]
-    proximus_urls = list(set(proximus_urls))  # Remove duplicates
+    # Filter to only Proximus URLs (remove duplicates but keep language info)
+    # Create a dict to keep unique URLs with their languages
+    unique_urls = {}
+    for url, lang in all_urls:
+        if 'proximus.be' in url:
+            if url not in unique_urls:
+                unique_urls[url] = lang
+    
+    proximus_urls = list(unique_urls.items())  # Back to list of tuples
     
     print(f"[+] Total unique URLs to crawl: {len(proximus_urls)}")
+    print(f"    EN: {sum(1 for _, l in proximus_urls if l == 'EN')}")
+    print(f"    FR: {sum(1 for _, l in proximus_urls if l == 'FR')}")
+    print(f"    NL: {sum(1 for _, l in proximus_urls if l == 'NL')}")
     print()
     
     if len(proximus_urls) == 0:
@@ -243,7 +256,7 @@ def main():
     print(f"[*] Crawling {total_pages} pages...")
     print()
     
-    for index, url in enumerate(proximus_urls, 1):
+    for index, (url, language) in enumerate(proximus_urls, 1):
         # Print progress every 10 pages
         if index % 10 == 0 or index == 1:
             print(f"[Progress] {index}/{total_pages} ({index*100//total_pages}%)")
@@ -253,15 +266,15 @@ def main():
         if not html:
             continue
         
-        # Extract content
-        content = extract_content(html, url)
+        # Extract content (pass language)
+        content = extract_content(html, url, language)
         if not content:
             continue
         
         # Check if page has security keywords
         if has_security_keywords(content):
             security_pages.append(content)
-            print(f"  ✓ Found security page: {url}")
+            print(f"  ✓ Found security page ({language}): {url}")
         
         # Be respectful: 0.5 second delay between requests
         time.sleep(0.5)
@@ -274,13 +287,17 @@ def main():
     if security_pages:
         print(f"[*] Writing results to {OUTPUT_FILE}...")
         
+        # Sort by language, then by URL for better organization
+        security_pages_sorted = sorted(security_pages, key=lambda x: (x['language'], x['url']))
+        
         with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['URL', 'Title', 'H1', 'H2s', 'Meta Description', 'Preview']
+            fieldnames = ['Language', 'URL', 'Title', 'H1', 'H2s', 'Meta Description', 'Preview']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             
             writer.writeheader()
-            for page in security_pages:
+            for page in security_pages_sorted:
                 writer.writerow({
+                    'Language': page['language'],
                     'URL': page['url'],
                     'Title': page['title'],
                     'H1': page['h1'],
@@ -290,6 +307,16 @@ def main():
                 })
         
         print(f"[+] Results saved to {OUTPUT_FILE}")
+        
+        # Print summary by language
+        en_count = sum(1 for p in security_pages if p['language'] == 'EN')
+        fr_count = sum(1 for p in security_pages if p['language'] == 'FR')
+        nl_count = sum(1 for p in security_pages if p['language'] == 'NL')
+        
+        print(f"[+] Summary:")
+        print(f"    EN: {en_count} pages")
+        print(f"    FR: {fr_count} pages")
+        print(f"    NL: {nl_count} pages")
     else:
         print("[-] No security-related pages found")
     
