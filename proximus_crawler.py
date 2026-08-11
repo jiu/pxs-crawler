@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlparse
 
 # Configuration
 SITE_URL = "https://www.proximus.be"
-SITEMAP_URL = "https://www.proximus.be/sitemap.xml"
+SITEMAP_URL = "https://www.proximus.be/iportal/iportal-en-sitemap.xml"
 OUTPUT_FILE = f"proximus_cybersecurity_audit_{datetime.now().strftime('%Y-%m-%d')}.csv"
 
 # Keywords to search for (case insensitive)
