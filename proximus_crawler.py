@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Proximus Cybersecurity Content Crawler - VERSION 2
-Improved: Handles nested sitemaps, better keyword matching
+Proximus Cybersecurity Content Crawler - VERSION 6 (TEST MODE)
+Limited to 100 URLs for quick testing of the entire pipeline
 """
 
 import requests
@@ -20,7 +20,8 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 # Configuration
 SITE_URL = "https://www.proximus.be"
 SITEMAP_URL = "https://www.proximus.be/sitemap.xml"
-OUTPUT_FILE = f"proximus_cybersecurity_audit_{datetime.now().strftime('%Y-%m-%d')}.csv"
+OUTPUT_FILE = f"proximus_cybersecurity_audit_TEST_{datetime.now().strftime('%Y-%m-%d')}.csv"
+MAX_URLS = 100  # LIMIT FOR TESTING! Change to remove limit
 
 # Keywords to search for (case insensitive)
 KEYWORDS = [
@@ -211,8 +212,9 @@ def has_security_keywords(content):
 def main():
     """Main crawler function"""
     print("=" * 60)
-    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER - VERSION 2")
+    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER - VERSION 6 (TEST MODE)")
     print("=" * 60)
+    print(f"[TEST] Limited to {MAX_URLS} URLs for quick testing")
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
@@ -223,10 +225,10 @@ def main():
     if not all_urls:
         print("[-] No URLs found in sitemaps. Trying direct URL...")
         all_urls.extend([
-            "https://www.proximus.be/en/",
-            "https://www.proximus.be/en/family/digital-protection",
-            "https://www.proximus.be/en/packs/options/secure-net",
-            "https://www.proximus.be/en/business/",
+            ("https://www.proximus.be/en/", "EN"),
+            ("https://www.proximus.be/en/family/digital-protection", "EN"),
+            ("https://www.proximus.be/en/packs/options/secure-net", "EN"),
+            ("https://www.proximus.be/en/business/", "EN"),
         ])
     
     # Filter to only Proximus URLs (remove duplicates but keep language info)
@@ -239,7 +241,10 @@ def main():
     
     proximus_urls = list(unique_urls.items())  # Back to list of tuples
     
-    print(f"[+] Total unique URLs to crawl: {len(proximus_urls)}")
+    # LIMIT TO MAX_URLS FOR TESTING
+    proximus_urls = proximus_urls[:MAX_URLS]
+    
+    print(f"[+] Total unique URLs to crawl: {len(proximus_urls)} (limited to {MAX_URLS} for testing)")
     print(f"    EN: {sum(1 for _, l in proximus_urls if l == 'EN')}")
     print(f"    FR: {sum(1 for _, l in proximus_urls if l == 'FR')}")
     print(f"    NL: {sum(1 for _, l in proximus_urls if l == 'NL')}")
@@ -257,8 +262,8 @@ def main():
     print()
     
     for index, (url, language) in enumerate(proximus_urls, 1):
-        # Print progress every 10 pages
-        if index % 10 == 0 or index == 1:
+        # Print progress every 5 pages
+        if index % 5 == 0 or index == 1:
             print(f"[Progress] {index}/{total_pages} ({index*100//total_pages}%)")
         
         # Fetch page
@@ -323,6 +328,7 @@ def main():
     print()
     print("=" * 60)
     print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"[TEST MODE COMPLETE] Ready for full crawl!")
     print("=" * 60)
 
 if __name__ == "__main__":
