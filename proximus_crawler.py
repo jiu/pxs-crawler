@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 SITE_URL = "https://www.proximus.be"
 SITEMAP_URL = "https://www.proximus.be/sitemap.xml"
 OUTPUT_FILE = f"proximus_cybersecurity_audit_TEST_{datetime.now().strftime('%Y-%m-%d')}.csv"
-MAX_URLS = 100  # LIMIT FOR TESTING! Change to remove limit
+MAX_URLS = 300  # INCREASED for better testing coverage
 
 # Keywords to search for (case insensitive)
 KEYWORDS = [
@@ -266,20 +266,32 @@ def main():
         if index % 5 == 0 or index == 1:
             print(f"[Progress] {index}/{total_pages} ({index*100//total_pages}%)")
         
+        # DEBUG: Show first few URLs being crawled
+        if index <= 5:
+            print(f"  [DEBUG] Crawling: {url[:80]}...")
+        
         # Fetch page
         html = fetch_page(url)
         if not html:
+            if index <= 10:
+                print(f"  [DEBUG] Failed to fetch: {url[:80]}")
             continue
         
         # Extract content (pass language)
         content = extract_content(html, url, language)
         if not content:
+            if index <= 10:
+                print(f"  [DEBUG] Failed to extract: {url[:80]}")
             continue
         
         # Check if page has security keywords
         if has_security_keywords(content):
             security_pages.append(content)
             print(f"  ✓ Found security page ({language}): {url}")
+        else:
+            # DEBUG: Sample of pages that DON'T match
+            if index <= 10:
+                print(f"  [no match] {url[:60]}... | Title: {content['title'][:40]}...")
         
         # Be respectful: 0.5 second delay between requests
         time.sleep(0.5)
