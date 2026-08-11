@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Proximus Cybersecurity Content Crawler
-Crawls proximus.be and finds all pages related to cybersecurity, digital trust, etc.
-Exports results to CSV for analysis.
+Proximus Cybersecurity Content Crawler - VERSION 2
+Improved: Handles nested sitemaps, better keyword matching
 """
 
 import requests
@@ -12,10 +11,15 @@ import time
 from datetime import datetime
 import sys
 from urllib.parse import urljoin, urlparse
+import warnings
+from bs4 import XMLParsedAsHTMLWarning
+
+# Suppress XML parser warning
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 # Configuration
 SITE_URL = "https://www.proximus.be"
-SITEMAP_URL = "https://www.proximus.be/iportal/iportal-en-sitemap.xml"
+SITEMAP_URL = "https://www.proximus.be/sitemap.xml"
 OUTPUT_FILE = f"proximus_cybersecurity_audit_{datetime.now().strftime('%Y-%m-%d')}.csv"
 
 # Keywords to search for (case insensitive)
@@ -42,7 +46,11 @@ KEYWORDS = [
     "spyware",
     "firewall",
     "password",
-    "authentication"
+    "authentication",
+    "scam",
+    "fraud",
+    "trust",
+    "safe"
 ]
 
 # Headers to avoid bot detection
@@ -55,20 +63,75 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-def get_urls_from_sitemap():
-    """Extract all URLs from sitemap.xml"""
-    print(f"[*] Fetching sitemap from {SITEMAP_URL}...")
+all_urls = []
+
+def get_urls_from_sitemaps(sitemap_url, depth=0, allowed_langs=None):
+    """Recursively extract URLs from sitemaps"""
+    if depth > 5:  # Prevent infinite recursion
+        return []
+    
+    if allowed_langs is None:
+        allowed_langs = ['en', 'fr', 'nl']  # Default languages
+    
     try:
-        response = requests.get(SITEMAP_URL, headers=HEADERS, timeout=30)
+        print(f"[*] Fetching sitemap (depth {depth}): {sitemap_url}")
+        response = requests.get(sitemap_url, headers=HEADERS, timeout=30)
         response.raise_for_status()
         
+        # Parse XML properly
         soup = BeautifulSoup(response.content, 'xml')
-        urls = [loc.text for loc in soup.find_all('loc')]
         
-        print(f"[+] Found {len(urls)} URLs in sitemap")
+        # Check if this is a sitemap index (contains other sitemaps)
+        sitemaps = soup.find_all('sitemap')
+        
+        if sitemaps:
+            print(f"[+] Found {len(sitemaps)} sitemaps in index")
+            for sitemap in sitemaps:
+                loc = sitemap.find('loc')
+                if loc:
+                    nested_url = loc.text.strip()
+                    
+                    # Filter by language for iportal sitemaps
+                    if 'iportal' in nested_url:
+                        # Extract language from URL (iportal-en-, iportal-fr-, etc.)
+                        lang = None
+                        if 'iportal-en' in nested_url:
+                            lang = 'en'
+                        elif 'iportal-fr' in nested_url:
+                            lang = 'fr'
+                        elif 'iportal-nl' in nested_url:
+                            lang = 'nl'
+                        
+                        # Only follow allowed languages
+                        if lang and lang not in allowed_langs:
+                            print(f"[→] Skipping {lang} sitemap (not in allowed languages)")
+                            continue
+                    
+                    print(f"[→] Following nested sitemap: {nested_url}")
+                    urls = get_urls_from_sitemaps(nested_url, depth + 1, allowed_langs)
+                    all_urls.extend(urls)
+            
+            return []
+        
+        # Otherwise extract URLs (this is an actual sitemap with URLs)
+        urls = []
+        url_entries = soup.find_all('url')
+        
+        if url_entries:
+            for url_entry in url_entries:
+                loc = url_entry.find('loc')
+                if loc:
+                    url = loc.text.strip()
+                    # Only add if it's an iportal URL (main content)
+                    if 'iportal' in url or '/en/' in url or '/fr/' in url or '/nl/' in url:
+                        urls.append(url)
+            
+            print(f"[+] Found {len(urls)} content URLs in this sitemap")
+        
         return urls
+        
     except Exception as e:
-        print(f"[-] Error fetching sitemap: {e}")
+        print(f"[-] Error fetching {sitemap_url}: {e}")
         return []
 
 def fetch_page(url):
@@ -144,21 +207,34 @@ def has_security_keywords(content):
 def main():
     """Main crawler function"""
     print("=" * 60)
-    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER")
+    print("PROXIMUS CYBERSECURITY CONTENT CRAWLER - VERSION 2")
     print("=" * 60)
     print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
     
-    # Get URLs from sitemap
-    urls = get_urls_from_sitemap()
-    if not urls:
-        print("[-] No URLs found in sitemap. Exiting.")
-        sys.exit(1)
+    # Get URLs from sitemap (including nested)
+    print("[*] Fetching sitemap structure...")
+    get_urls_from_sitemaps(SITEMAP_URL)
     
-    # Filter to only Proximus URLs (in case sitemap has external links)
-    proximus_urls = [url for url in urls if 'proximus.be' in url]
-    print(f"[+] Filtered to {len(proximus_urls)} Proximus URLs")
+    if not all_urls:
+        print("[-] No URLs found in sitemaps. Trying direct URL...")
+        all_urls.extend([
+            "https://www.proximus.be/en/",
+            "https://www.proximus.be/en/family/digital-protection",
+            "https://www.proximus.be/en/packs/options/secure-net",
+            "https://www.proximus.be/en/business/",
+        ])
+    
+    # Filter to only Proximus URLs
+    proximus_urls = [url for url in all_urls if 'proximus.be' in url]
+    proximus_urls = list(set(proximus_urls))  # Remove duplicates
+    
+    print(f"[+] Total unique URLs to crawl: {len(proximus_urls)}")
     print()
+    
+    if len(proximus_urls) == 0:
+        print("[-] No Proximus URLs found. Exiting.")
+        sys.exit(1)
     
     # Crawl and analyze each page
     security_pages = []
@@ -169,7 +245,7 @@ def main():
     
     for index, url in enumerate(proximus_urls, 1):
         # Print progress every 10 pages
-        if index % 10 == 0:
+        if index % 10 == 0 or index == 1:
             print(f"[Progress] {index}/{total_pages} ({index*100//total_pages}%)")
         
         # Fetch page
@@ -185,6 +261,7 @@ def main():
         # Check if page has security keywords
         if has_security_keywords(content):
             security_pages.append(content)
+            print(f"  ✓ Found security page: {url}")
         
         # Be respectful: 0.5 second delay between requests
         time.sleep(0.5)
